@@ -18,6 +18,18 @@ progress_bar() {
   done
   clean_line
 }
+
+# Spinner
+spin() {
+  spinner="/|\\-/|\\-"
+  while :; do
+    for i in $(seq 0 7); do
+      echo -n "${spinner:$i:1}"
+      echo -en "\010"
+      sleep 0.35
+    done
+  done
+}
 # END Progress Bar ===================================
 
 echo ""
@@ -28,6 +40,10 @@ echo "|                                      |"
 echo "========================================"
 echo ""
 if [ "${1}" != "--rapid" ] && [ "${1}" != "-r" ]; then
+  progress_bar 4
+fi
+
+if [ "${1}" != "--help" ] && [ "${1}" != "-h" ]; then
   progress_bar 4
 fi
 
@@ -73,12 +89,40 @@ echo "=================="
 echo "|"
 
 echo "| ==> Running k8s Setup:"
-$TERMINAL -e sh ./scripts/k8s_setup.sh &
-K8S_SETUP_PID=$!
-# Start the Progress Bar:
-progress_bar 4
-echo "| | "
-echo "| =====> Dedicated Terminal: $TERMINAL | pid: $K8S_SETUP_PID"
+spin &
+SPIN_PID=$!
+# Kill the spinner on any signal, including our own exit.
+trap "kill -9 $SPIN_PID" $(seq 0 15)
+$TERMINAL -e sh ./scripts/k8s_setup.sh
+echo "| | =====> Watching for Mongo Pod Status:"
+MONGO_POD_STATUS=""
+while [ "$MONGO_POD_STATUS" != "Running" ]; do
+  printf "\r"
+  POD_OUTPUT=$(kubectl get pods -n litmus | grep mongo)
+  printf "\r"
+  if [[ "$POD_OUTPUT" = "" ]]; then
+    printf "\rWaiting for Litmus namespace..."
+    sleep 1
+    continue
+  else
+    printf "\r| PodOutput: $POD_OUTPUT"
+  fi
+
+  i=0
+  for value in $POD_OUTPUT; do
+    if [ $i = 0 ]; then
+      MONGOPODID=$value
+    elif [ $i = 2 ]; then
+      MONGO_POD_STATUS=$value
+    elif [ $i -gt 2 ]; then
+      break
+    fi
+    i=$((i + 1))
+  done
+done
+
+$TERMINAL -e kubectl port-forward $MONGOPODID -n litmus 27017:27017 &
+PORT_FWD_PID=$!
 
 echo "| | "
 echo "| | "
@@ -100,5 +144,6 @@ progress_bar 2
 echo "| | "
 echo "| =====> Dedicated Terminal: $TERMINAL | pid: $AUTH_SETUP_PID"
 echo "|______________________________________ "
-trap "kill -9 $K8S_SETUP_PID $GQL_SETUP_PID $AUTH_SETUP_PID" SIGINT
+# trap "kill -9 $K8S_SETUP_PID $GQL_SETUP_PID $AUTH_SETUP_PID" SIGINT
+trap "kill -9 $PORT_FWD_PID $GQL_SETUP_PID $AUTH_SETUP_PID $SPIN_PID" SIGINT
 ./scripts/frontend_init.sh
